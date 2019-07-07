@@ -8,6 +8,8 @@ verify_ssl = true
 [packages]
 django = "*"
 django-widget-tweaks = "*"
+requests = "*"
+urllib = "*"
 
 [requires]
 python_version = "3.7"

@@ -1,12 +1,22 @@
 #from django.contrib.messages.api import success
-from django.shortcuts import render, redirect
+from urllib.parse import parse_qs, urlparse, quote
+
+import requests
+from django.contrib.auth import authenticate, login
+from django.contrib.auth.forms import UserCreationForm
+from django.db.models.deletion import SET_DEFAULT
+from django.forms.utils import ErrorList
+from django.http import Http404, JsonResponse, request
+from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
 from django.views import generic
-from django.contrib.auth.forms import UserCreationForm
-from django.contrib.auth import authenticate, login
-from .models import Hall, Video
-from .forms import VideoForm, SearchForm
 
+from halls.forms import SearchForm
+
+from .forms import SearchForm, VideoForm
+from .models import Hall, Video
+
+YOUTUBE_API_KEY = "AIzaSyDCIdJxdkbDMdkZ-xM9lYVYiaY1udDkraQ"
 
 # Create your views here.
 
@@ -19,19 +29,43 @@ def dashboard(request):
 def add_video(request, pk):
     form = VideoForm()
     search_form = SearchForm()
+    hall = Hall.objects.get(pk=pk)
+    if not hall.user == request.user:
+        raise Http404
 
     if request.method == 'POST':
-        filled_form = VideoForm(request.POST)
-        if filled_form.is_valid():
+        form = VideoForm(request.POST)
+        if form.is_valid():
             video = Video()
-            video.title = filled_form.cleaned_data['title']
-            video.url = filled_form.cleaned_data['url']
-            video.youtube_id = filled_form.cleaned_data['youtube_id']
-            video.hall = Hall.objects.get(pk=pk)
-            video.save()
+            video.hall = hall
+            video.url = form.cleaned_data['url']
+            parsed_url = urlparse(video.url)
+            video_id = parse_qs(parsed_url.query).get('v')
+            if video_id:
+                video.youtube_id = video_id[0]
+                response = requests.get(f"https://www.googleapis.com/youtube/v3/videos?part=snippet&id={ video_id[0] }&key={ YOUTUBE_API_KEY }")
+                json = response.json()
+                title = json['items'][0]['snippet']['title']
+                video.title = title
+                video.save()
+                return redirect('detail_hall', pk)
+            else:
+                errors = form._errors.setdefault('url', ErrorList())
+                errors.append("Needs to be a YouTube URL")
+    return render(request, 'halls/add_video.html', {'form':form, 'search_form':search_form, 'hall':hall})
 
-    return render(request, 'halls/add_video.html', {'form':form, 'search_form':search_form})
+def video_search(request):
+    search_form = SearchForm(request.GET)
+    if search_form.is_valid():
+        encoded_search_term = quote(search_form.cleaned_data['search_term'])
+        response = requests.get(f"https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=6&q={ encoded_search_term }&key={ YOUTUBE_API_KEY }")
+        return JsonResponse(response.json())
+    return JsonResponse({'error':'Not able to validate form.'})
 
+class DeleteVideo(generic.DeleteView):
+    model = Video
+    template_name = 'halls/delete_video.html'
+    success_url = reverse_lazy('dashboard')
 
 class SignUp(generic.CreateView):
     form_class = UserCreationForm
@@ -70,3 +104,4 @@ class DeleteHall(generic.DeleteView):
     model = Hall
     template_name = 'halls/delete_hall.html'
     success_url = reverse_lazy('dashboard')
+
